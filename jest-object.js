@@ -1,0 +1,7 @@
+'use strict';
+
+module.exports = {
+	serialise: {
+		jsObject: require('./serialise-js-object.js'),
+	},
+};
