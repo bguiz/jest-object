@@ -2,6 +2,8 @@
 
 const path = require('path');
 
+const prettyFormat = require('pretty-format');
+
 module.exports = {
 	getSpecSeedsInfo,
 	seededPropertyTestFactory,
@@ -19,15 +21,13 @@ function getSpecSeedsInfo(spec, absoluteFileName) {
 
 	//NOTE jest always appends a number,
 	// even when snapshot name is explicitly specified
-	// snapshotSeeds = JSON.parse(
-	// 	require(snapShotFileName)[`${snapshotSeedsName} 1`]);
 	let snapshotExports;
 	try {
 		snapshotExports = require(snapShotFileName);
 	} catch (ex) {
 		snapshotExports = {};
 	}
-	const snapshotSeeds = Object.keys(snapshotExports)
+	const snapshotSeedsFromExports = Object.keys(snapshotExports)
 		.filter((key) => key.indexOf(snapshotSeedsName) === 0)
 		.map((name) => {
 			const matches = name.match(/.+\s(\d+)\s(\d+)/);
@@ -41,6 +41,20 @@ function getSpecSeedsInfo(spec, absoluteFileName) {
 			return seed;
 		})
 		.filter((seed) => !!seed);
+	const snapshotSeedsFromFailedListStr =
+		snapshotExports[`${snapshotSeedsName} failed list 1`];
+	let snapshotSeedsFromFailedList;
+	try {
+		snapshotSeedsFromFailedList = JSON.parse(snapshotSeedsFromFailedListStr);
+	} catch (ex) {
+		snapshotSeedsFromFailedList = [];
+	}
+	// Merge unique snapshot seeds from two different sources
+	const snapshotSeeds =
+		[...(new Set([
+			...snapshotSeedsFromFailedList,
+			...snapshotSeedsFromExports,
+		]))];
 
 	return {
 		spec,
@@ -52,6 +66,25 @@ function getSpecSeedsInfo(spec, absoluteFileName) {
 		snapshotExports,
 	};
 
+}
+
+// Use https://github.com/thejameskyle/pretty-format to format
+// select parts of a result object, namely
+// the input and the "shrunk" input
+// This is needed because
+// `JSON.stringify` does not encode values such as `NaN` or `Infinity`
+// whereas `pretty-format` does do this
+// On the other hand, `pretty-format` cannot be deserialised,
+// whereas JSON can be deserialised via `JSON.parse`
+// thus the most pertinent option is a combination of the two.
+function transformResultForSerialisation(result) {
+	const out = Object.assign({}, result, {
+		fail: prettyFormat(result.fail, { min: true }),
+		shrunk: Object.assign({}, result.shrunk, {
+			smallest: prettyFormat(result.shrunk.smallest, { min: true }),
+		}),
+	});
+	return out;
 }
 
 function seededPropertyTestFactory(checkPropertyFn, absoluteFileName) {
@@ -71,11 +104,11 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName) {
 				// This property based test has failed, add a snapshot as a new example based test
 				newSeed = result.seed;
 				newSeedSnapshotName = `${specSeedsInfo.snapshotSeedsName} ${result.seed}`;
-				expect(result).toMatchSnapshot(newSeedSnapshotName);
+				expect(transformResultForSerialisation(result)).toMatchSnapshot(newSeedSnapshotName);
 			}
 		});
 
-		// Re-execute examples generated from *prior* seeds
+		// Re-execute examples generated from all *prior* seeds
 		specSeedsInfo = getSpecSeedsInfo(spec, absoluteFileName);
 		specSeedsInfo.snapshotSeeds.forEach((seed) => {
 			const seedSpec = it(`seed ${seed}`, () => {
@@ -85,19 +118,28 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName) {
 				});
 
 				const snapshotText = specSeedsInfo.snapshotExports[`${seedSpec.result.fullName} 1`] || '';
-				if (result.result) {
-					//TODO if we don't run the snapshot, jest will earmark it as "obsolete"
-					// Which is fine in most circumstances, but in this case we do want to keep it around
-					// and don't want an "--updateSnapshots" to clear all the example based tests
-					// that have been generated from the prior property based tests.
-					// So figure out a way to prevent this from happening.
-					// expect(result).toMatchSnapshot();
-				} else {
-					//NOTE Hack alert: Using a regex to extract input array as string from the serialized snapshot
-					// this is, therefore, likely to be quite flakey/ not robust
-					//TODO Write a lexer/ parser that can de-serialise https://github.com/thejameskyle/pretty-format
-					const matches = snapshotText.match( /\n  \"fail\"\s*\:\s*Array\s*\[([\s\S]*)\n  \]/ );
-					const input = `[${(matches && matches[1]) || ''}]`;
+				let snapshotObject;
+				try {
+					snapshotObject = JSON.parse(snapshotText);
+				} catch (ex) {
+					snapshotObject = result;
+				}
+
+				// If we don't run the snapshot, jest will earmark it as "obsolete"
+				// Which is fine in most circumstances, but in this case we do want to keep it around
+				// and don't want an "--updateSnapshots" to clear all the example based tests
+				// that have been generated from the prior property based tests.
+				// A redundant expectation where the snapshot is compared to itself
+				// is used to guard against this obsoletion.
+				// H/W if the `JSON.parse` above failed, then
+				// This snapshot expectation could actually fail, intentionally, however,
+				// when the `JSON.parse` above fails.
+				expect(snapshotObject).toMatchSnapshot();
+
+				if (!result.result) {
+					// This example based test has failed, thus has not been fixed (or has regressed),
+					// since the property based test generated this failing example
+					const input = snapshotObject.fail;
 					expect({
 						result: result.result,
 						seed: result.seed,
@@ -113,12 +155,15 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName) {
 		});
 
 		it('add new seed to list if any', () => {
+			let snapshotSeeds;
 			if (newSeed) {
 				// When the property based test in 'new seed' has failed,
 				// also append seed to list of failed seeds
-				const updatedSnapshotSeeds = [...specSeedsInfo.snapshotSeeds, newSeed];
-				expect(updatedSnapshotSeeds).toMatchSnapshot(`${specSeedsInfo.snapshotSeedsName} failed list`);
+				snapshotSeeds = [...specSeedsInfo.snapshotSeeds, newSeed];
+			} else {
+				snapshotSeeds = specSeedsInfo.snapshotSeeds;
 			}
+			expect(snapshotSeeds).toMatchSnapshot(`${specSeedsInfo.snapshotSeedsName} failed list`);
 		});
 
 	});

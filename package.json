@@ -1,6 +1,6 @@
 {
   "name": "jest-object",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Jest utility for object snapshots",
   "main": "jest-object.js",
   "scripts": {
@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/bguiz/jest-object#readme",
   "dependencies": {
-    "json-stable-stringify": "^1.0.1"
+    "json-stable-stringify": "^1.0.1",
+    "pretty-format": "^20.0.3"
   }
 }
