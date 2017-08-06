@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/bguiz/jest-object#readme",
   "dependencies": {
-    "json-stable-stringify": "^1.0.1"
+    "json-stable-stringify": "^1.0.1",
+    "pretty-format": "^20.0.3"
   }
 }
