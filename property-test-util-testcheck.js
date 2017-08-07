@@ -9,7 +9,11 @@ module.exports = {
 	seededPropertyTestFactory,
 };
 
-function getSpecSeedsInfo(spec, absoluteFileName) {
+function getSpecSeedsInfo(spec, absoluteFileName, options) {
+
+	const {
+		noDuplicateShrunk,
+	} = options;
 
 	const fullName = spec.result.fullName;
 	const parentName = (spec.result.fullName).replace(spec.result.description, '').trim();
@@ -27,9 +31,10 @@ function getSpecSeedsInfo(spec, absoluteFileName) {
 	} catch (ex) {
 		snapshotExports = {};
 	}
-	const snapshotSeedsFromExports = Object.keys(snapshotExports)
+	const snapshotsFiltered = Object.keys(snapshotExports)
 		.filter((key) => key.indexOf(snapshotSeedsName) === 0)
 		.map((name) => {
+			// Match "12345" from "exports[`[foo] [generated examples] seed 12345 1`]""
 			const matches = name.match(/.+\s(\d+)\s(\d+)/);
 			if (!matches || matches.length !== 3) {
 				return;
@@ -38,23 +43,35 @@ function getSpecSeedsInfo(spec, absoluteFileName) {
 			if (isNaN(seed)) {
 				return;
 			}
-			return seed;
+			return {
+				name,
+				seed,
+			};
 		})
-		.filter((seed) => !!seed);
+		.filter((item) => !!item);
+	const snapshotSeedsFromExports = snapshotsFiltered
+		.map((item) => item.seed);
 	const snapshotSeedsFromFailedListStr =
 		snapshotExports[`${snapshotSeedsName} failed list 1`];
-	let snapshotSeedsFromFailedList;
-	try {
-		snapshotSeedsFromFailedList = JSON.parse(snapshotSeedsFromFailedListStr);
-	} catch (ex) {
-		snapshotSeedsFromFailedList = [];
-	}
+	const snapshotSeedsFromFailedList = parseJson(snapshotSeedsFromFailedListStr) || [];
 	// Merge unique snapshot seeds from two different sources
 	const snapshotSeeds =
 		[...(new Set([
 			...snapshotSeedsFromFailedList,
 			...snapshotSeedsFromExports,
 		]))];
+
+	let shrunkToSeedMap;
+	if (noDuplicateShrunk) {
+		shrunkToSeedMap = new Map();
+		snapshotsFiltered.forEach((snapshot) => {
+			const snapshotExport = parseJson(snapshotExports[snapshot.name]);
+			if (snapshotExport) {
+				const shrunk = snapshotExport.shrunk.smallest;
+				shrunkToSeedMap.set(shrunk, snapshot.seed);
+			}
+		});
+	}
 
 	return {
 		spec,
@@ -64,6 +81,7 @@ function getSpecSeedsInfo(spec, absoluteFileName) {
 		snapshotSeedsName,
 		snapshotSeeds,
 		snapshotExports,
+		shrunkToSeedMap,
 	};
 
 }
@@ -87,29 +105,38 @@ function transformResultForSerialisation(result) {
 	return out;
 }
 
-function seededPropertyTestFactory(checkPropertyFn, absoluteFileName) {
+function seededPropertyTestFactory(checkPropertyFn, absoluteFileName, options) {
+
+	const {
+		noDuplicateShrunk,
+	} = options;
 
 	const descSpec = describe('[generated examples]', () => {
 
 		let newSeed;
 		let newSeedSnapshotName;
 		let specSeedsInfo;
+		let seedByShrunk;
 
 		const spec = it('new seed', () => {
 			// Run with a *new* seed
-			// specSeedsInfo = getSpecSeedsInfo(spec, absoluteFileName);
 			const result = checkPropertyFn({
 			});
 			if (!result.result) {
-				// This property based test has failed, add a snapshot as a new example based test
-				newSeed = result.seed;
-				newSeedSnapshotName = `${specSeedsInfo.snapshotSeedsName} ${result.seed}`;
-				expect(transformResultForSerialisation(result)).toMatchSnapshot(newSeedSnapshotName);
+				// This property based test has failed... make an example out of it!
+				const transformedResult = transformResultForSerialisation(result);
+				const shrunk = transformedResult.shrunk.smallest;
+				if (!noDuplicateShrunk ||
+					!specSeedsInfo.shrunkToSeedMap.has(shrunk)) {
+					newSeed = result.seed;
+					newSeedSnapshotName = `${specSeedsInfo.snapshotSeedsName} ${result.seed}`;
+					expect(transformedResult).toMatchSnapshot(newSeedSnapshotName);
+				}
 			}
 		});
 
 		// Re-execute examples generated from all *prior* seeds
-		specSeedsInfo = getSpecSeedsInfo(spec, absoluteFileName);
+		specSeedsInfo = getSpecSeedsInfo(spec, absoluteFileName, options);
 		specSeedsInfo.snapshotSeeds.forEach((seed) => {
 			const seedSpec = it(`seed ${seed}`, () => {
 				// Run with a seed that has previously failed
@@ -118,12 +145,7 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName) {
 				});
 
 				const snapshotText = specSeedsInfo.snapshotExports[`${seedSpec.result.fullName} 1`] || '';
-				let snapshotObject;
-				try {
-					snapshotObject = JSON.parse(snapshotText);
-				} catch (ex) {
-					snapshotObject = result;
-				}
+				const snapshotObject = parseJson(snapshotText) || transformResultForSerialisation(result);
 
 				// If we don't run the snapshot, jest will earmark it as "obsolete"
 				// Which is fine in most circumstances, but in this case we do want to keep it around
@@ -168,4 +190,16 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName) {
 
 	});
 
+}
+
+// Attempt to parse a string as JSON
+// If attempt fails, returns `undefined`, and does *not* throw any errors
+function parseJson(str) {
+	let obj;
+	try {
+		obj = JSON.parse(str);
+	} catch (ex) {
+		// Do nothing, leave as undefined
+	}
+	return obj;
 }
