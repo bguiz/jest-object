@@ -9,11 +9,14 @@ module.exports = {
 	seededPropertyTestFactory,
 };
 
-function getSpecSeedsInfo(spec, absoluteFileName, options) {
+function getSpecSeedsInfo({ spec, absoluteFileName, options }) {
 
 	const {
 		noDuplicateShrunk,
-	} = options;
+		debug,
+	} = (options || {});
+
+	const log = debug ? console.log : () => {};
 
 	const fullName = spec.result.fullName;
 	const parentName = (spec.result.fullName).replace(spec.result.description, '').trim();
@@ -72,6 +75,13 @@ function getSpecSeedsInfo(spec, absoluteFileName, options) {
 			}
 		});
 	}
+log(
+	'\nsnapshotSeedsFromExports.length:', snapshotSeedsFromExports.length,
+	'\nsnapshotSeedsFromFailedList.length:', snapshotSeedsFromFailedList.length,
+	'\nsnapshotSeeds.length:', snapshotSeeds.length,
+	'\nshrunkToSeedMap.size:',
+		(shrunkToSeedMap && shrunkToSeedMap.size) || 'allow duplicate shrunks',
+);
 
 	return {
 		spec,
@@ -105,11 +115,14 @@ function transformResultForSerialisation(result) {
 	return out;
 }
 
-function seededPropertyTestFactory(checkPropertyFn, absoluteFileName, options) {
+function seededPropertyTestFactory({ checkProperty, absoluteFileName, options }) {
 
 	const {
 		noDuplicateShrunk,
-	} = options;
+		debug,
+	} = (options || {});
+
+	const log = debug ? console.log : () => {};
 
 	const descSpec = describe('[generated examples]', () => {
 
@@ -120,7 +133,7 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName, options) {
 
 		const spec = it('new seed', () => {
 			// Run with a *new* seed
-			const result = checkPropertyFn({
+			const result = checkProperty({
 			});
 			if (!result.result) {
 				// This property based test has failed... make an example out of it!
@@ -131,16 +144,26 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName, options) {
 					newSeed = result.seed;
 					newSeedSnapshotName = `${specSeedsInfo.snapshotSeedsName} ${result.seed}`;
 					expect(transformedResult).toMatchSnapshot(newSeedSnapshotName);
+					log(
+						'\nnew snapshot shrunk/ seed:', shrunk, newSeed,
+					);
+				} else {
+					log(
+						'\nallowing duplicate shrunk:', !noDuplicateShrunk,
+						'\nduplicate shrunk seed:',
+							(specSeedsInfo.shrunkToSeedMap && specSeedsInfo.shrunkToSeedMap.get(shrunk)),
+						'\nshrunk:', shrunk,
+					);
 				}
 			}
 		});
 
 		// Re-execute examples generated from all *prior* seeds
-		specSeedsInfo = getSpecSeedsInfo(spec, absoluteFileName, options);
+		specSeedsInfo = getSpecSeedsInfo({ spec, absoluteFileName, options });
 		specSeedsInfo.snapshotSeeds.forEach((seed) => {
 			const seedSpec = it(`seed ${seed}`, () => {
 				// Run with a seed that has previously failed
-				const result = checkPropertyFn({
+				const result = checkProperty({
 					seed,
 				});
 
@@ -182,6 +205,9 @@ function seededPropertyTestFactory(checkPropertyFn, absoluteFileName, options) {
 				// When the property based test in 'new seed' has failed,
 				// also append seed to list of failed seeds
 				snapshotSeeds = [...specSeedsInfo.snapshotSeeds, newSeed];
+				log(
+					'\nappending new seed to failed list:', newSeed,
+				);
 			} else {
 				snapshotSeeds = specSeedsInfo.snapshotSeeds;
 			}
