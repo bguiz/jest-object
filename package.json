@@ -1,6 +1,6 @@
 {
   "name": "jest-object",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Jest utility for object snapshots",
   "main": "jest-object.js",
   "scripts": {
